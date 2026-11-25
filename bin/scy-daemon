@@ -1,0 +1,56 @@
+#!/usr/bin/env python3
+"""Scy-Shell Unified Background Coordinator & Unix-Socket IPC Daemon."""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import signal
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from scy_core.config_store import ScyConfigStore
+from scy_core.conflicts import ScyConflictScanner
+from scy_core.desktop_canvas import ScyDesktopCoordinator
+from scy_core.hypr_coordinator import ScyHyprCoordinator
+from scy_core.ipc_bus import ScyIpcServer
+from scy_core.security_preauth import ScyPreAuthCoordinator
+from scy_core.theme_engine import ScyThemeCoordinator
+
+
+async def run_daemon(home: Path | None, socket_path: Path | None) -> None:
+    store = ScyConfigStore(home_dir=home)
+    store.flush_all()
+    ScyConflictScanner(store).to_json_report()
+    thm = ScyThemeCoordinator(store)
+    thm.write_mandara_portable_m3_look()
+    thm.apply_palette(seed_hex=str(store.doc["providers"]["lucid"]["prefs"].get("themeColour", "#7AA2F7")))
+    ScyDesktopCoordinator(store).write_portal_config()
+    ScyPreAuthCoordinator(store).stage_display_manager_configs()
+    ScyHyprCoordinator(store).emit_modular_configs()
+
+    server = ScyIpcServer(store, sock_path=socket_path)
+    await server.start()
+
+    stop_ev = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, stop_ev.set)
+
+    print(f"[scy-daemon] Ready on {server.sock_path} (1,875 settings synced)", flush=True)
+    await stop_ev.wait()
+    await server.stop()
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="Scy-Shell Coordinator Daemon")
+    ap.add_argument("--home", type=Path, default=None, help="Override HOME directory")
+    ap.add_argument("--socket", type=Path, default=None, help="Override Unix socket path")
+    args = ap.parse_args()
+    asyncio.run(run_daemon(args.home, args.socket))
+
+
+if __name__ == "__main__":
+    main()

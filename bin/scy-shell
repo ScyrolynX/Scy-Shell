@@ -1,0 +1,289 @@
+#!/usr/bin/env python3
+"""Scy-Shell Unified Command-Line Interface."""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from scy_core.config_store import ScyConfigStore
+from scy_core.conflicts import ScyConflictScanner
+from scy_core.doctor import ScyDoctor
+from scy_core.federation import ScyFederationEngine
+from scy_core.hypr_coordinator import ScyHyprCoordinator
+from scy_core.provenance import ScyProvenanceVerifier
+from scy_core.security_preauth import ScyPreAuthCoordinator
+from scy_core.theme_engine import ScyThemeCoordinator
+
+
+def _parse_val(raw: str) -> Any:
+    low = raw.lower()
+    if low == "true":
+        return True
+    if low == "false":
+        return False
+    try:
+        return int(raw)
+    except ValueError:
+        pass
+    try:
+        return float(raw)
+    except ValueError:
+        pass
+    if (raw.startswith("[") and raw.endswith("]")) or (raw.startswith("{") and raw.endswith("}")):
+        try:
+            return json.loads(raw)
+        except Exception:
+            pass
+    return raw
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(prog="scy-shell", description="Scy-Shell Unified Desktop Shell Controller (Lucid 2 + Mandara)")
+    ap.add_argument("--home", type=Path, default=None, help="Override HOME directory")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("status", help="Show active providers, presentations, and schema summary")
+    sub.add_parser("provenance", help="Verify Phase 1 upstream SHA-256 baseline & reversible adapter patches")
+    doc_p = sub.add_parser("doctor", help="Run comprehensive CachyOS/Hyprland & resource diagnostics")
+    doc_p.add_argument("--json", action="store_true")
+
+    conf_p = sub.add_parser("conflicts", help="Scan exclusive D-Bus/Wayland/process conflicts")
+    conf_p.add_argument("--json", action="store_true")
+    conf_p.add_argument("--resync", action="store_true")
+
+    prov_p = sub.add_parser("provider", help="Get or set active provider for a domain")
+    prov_p.add_argument("domain", nargs="?")
+    prov_p.add_argument("target", nargs="?")
+
+    pres_p = sub.add_parser("presentation", help="Set visual presentation target (e.g. primary_identity, toasts)")
+    pres_p.add_argument("slot")
+    pres_p.add_argument("value")
+
+    cfg_p = sub.add_parser("config", help="Read or write any of the 1,875 unified settings")
+    cfg_p.add_argument("action", choices=["get", "set", "set-json", "reset", "search", "get-all"])
+    cfg_p.add_argument("key", nargs="?", default="")
+    cfg_p.add_argument("value", nargs="?")
+
+    thm_p = sub.add_parser("theme", help="Generate & sync M3 Expressive + OKLCH palettes and 28-app ledger")
+    thm_p.add_argument("action", choices=["apply", "adopt-modified"], default="apply", nargs="?")
+    thm_p.add_argument("--seed", default=None)
+
+    wg_p = sub.add_parser("wallgen", help="Generate procedural wallpaper (13 styles) & apply to active engine")
+    wg_p.add_argument("style", nargs="?", default="aurora")
+    wg_p.add_argument("--seed", default=None)
+
+    pl_p = sub.add_parser("plugins", help="Search all 89 Mandara built-in & WASM plugins")
+    pl_p.add_argument("query", nargs="?", default="")
+
+    ai_p = sub.add_parser("ai", help="Run deterministic / local-LLM natural language shell command")
+    ai_p.add_argument("prompt", nargs="+")
+
+    hy_p = sub.add_parser("hypr", help="Manage modular Hyprland 0.55+ Lua / .conf configs & 15s safety trials")
+    hy_p.add_argument("action", choices=["emit", "keybinds", "trial-confirm", "trial-revert"])
+    hy_p.add_argument("--full", action="store_true", help="Include all 17/22 DesktopIcons & 25 Mandara mappings")
+
+    pa_p = sub.add_parser("preauth", help="Stage harmonized SDDM & Mandara greetd configurations")
+    pa_p.add_argument("action", choices=["stage"], default="stage", nargs="?")
+
+    bk_p = sub.add_parser("backup", help="Create, list, or restore timestamped configuration snapshots")
+    bk_p.add_argument("action", choices=["create", "list", "restore"])
+    bk_p.add_argument("target", nargs="?", default=None, help="Backup tag (for create) or snapshot path/name (for restore)")
+
+    st_p = sub.add_parser("start", help="Launch Scy-Shell session (scy-daemon + gated Lucid Quickshell + gated Mandara)")
+    st_p.add_argument("--dry-run", action="store_true")
+
+    args = ap.parse_args()
+    is_restore = args.cmd == "backup" and args.action == "restore"
+    store = ScyConfigStore(home_dir=args.home, skip_init_load=is_restore)
+
+    if args.cmd == "provenance":
+        rep = ScyProvenanceVerifier().verify_all()
+        print(json.dumps(rep, indent=2))
+        return 0 if rep["ok"] else 1
+
+    if args.cmd == "status":
+        print(json.dumps({
+            "version": "1.0.0",
+            "settings_total": len(store.schema.by_id),
+            "active_providers": store.doc["active_providers"],
+            "presentations": store.doc["presentations"],
+        }, indent=2))
+        return 0
+
+    if args.cmd == "doctor":
+        doc = ScyDoctor(store)
+        rep = doc.run()
+        print(json.dumps(rep, indent=2) if args.json else doc.format_human(rep))
+        return 0
+
+    if args.cmd == "conflicts":
+        if args.resync:
+            store.flush_all()
+        rep = ScyConflictScanner(store).to_json_report()
+        print(json.dumps(rep, indent=2) if args.json else f"Conflicts: {rep['conflict_count']} (Critical: {rep['critical_count']})")
+        return 0
+
+    if args.cmd == "provider":
+        if not args.domain:
+            print(json.dumps(store.doc["active_providers"], indent=2))
+            return 0
+        if not args.target:
+            print(store.doc["active_providers"].get(args.domain, ""))
+            return 0
+        store.set_provider(args.domain, args.target)
+        ScyPreAuthCoordinator(store).stage_display_manager_configs()
+        print(f"Updated provider: {args.domain} -> {args.target}")
+        return 0
+
+    if args.cmd == "presentation":
+        store.set_presentation(args.slot, args.value)
+        print(f"Updated presentation: {args.slot} -> {args.value}")
+        return 0
+
+    if args.cmd == "config":
+        if args.action == "get-all":
+            print(json.dumps(store.get_all_values()))
+            return 0
+        if args.action == "get":
+            print(json.dumps(store.get_setting(args.key)))
+            return 0
+        if args.action == "reset":
+            store.reset_setting(args.key)
+            print(json.dumps({"ok": True, "scy_id": args.key, "value": store.get_setting(args.key)}))
+            return 0
+        if args.action in ("set", "set-json"):
+            if args.value is None:
+                raise SystemExit(f"Value required for 'config {args.action}'")
+            parsed_v = json.loads(args.value) if args.action == "set-json" else _parse_val(args.value)
+            meta = store.set_setting(args.key, parsed_v, validate=True)
+            # Trigger immediate live preview on Mandara IPC when Mandara is running in Wayland!
+            if meta.live_preview == "mandara_ipc" and os.environ.get("WAYLAND_DISPLAY"):
+                subprocess.run(
+                    ["mandara", "msg", "config", "set", meta.original_key, json.dumps(store.get_setting(args.key))],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            print(json.dumps({"ok": True, "scy_id": args.key, "value": store.get_setting(args.key)}))
+            return 0
+        if args.action == "search":
+            q = args.key.lower()
+            hits = [
+                {
+                    "scy_id": m.scy_id,
+                    "project": m.source_project,
+                    "key": m.original_key,
+                    "label": m.label,
+                    "ui_widget": m.ui_widget,
+                    "type": m.concrete_type,
+                    "min": m.min_val,
+                    "max": m.max_val,
+                    "unit": m.unit,
+                }
+                for m in store.schema.by_id.values()
+                if q in m.scy_id.lower() or q in m.original_key.lower() or q in m.category.lower() or q in m.label.lower()
+            ]
+            print(json.dumps(hits[:50], indent=2))
+            return 0
+
+    if args.cmd == "theme":
+        seed = args.seed or str(store.doc["providers"]["lucid"]["prefs"].get("themeColour", "#7AA2F7"))
+        thm = ScyThemeCoordinator(store)
+        thm.write_mandara_portable_m3_look()
+        res = thm.apply_palette(seed_hex=seed, adopt_modified=(args.action == "adopt-modified"))
+        print(json.dumps(res, indent=2))
+        return 0
+
+    if args.cmd == "wallgen":
+        seed = args.seed or str(store.doc["providers"]["lucid"]["prefs"].get("themeColour", "#7AA2F7"))
+        res = ScyFederationEngine(store).generate_procedural_wallpaper(style=args.style, seed_hex=seed)
+        print(json.dumps(res, indent=2))
+        return 0
+
+    if args.cmd == "plugins":
+        items = ScyFederationEngine(store).query_plugins(args.query)
+        print(json.dumps({"count": len(items), "items": items}, indent=2))
+        return 0
+
+    if args.cmd == "ai":
+        res = ScyFederationEngine(store).interpret_ai_command(" ".join(args.prompt), apply_immediately=True)
+        print(json.dumps(res, indent=2))
+        return 0
+
+    if args.cmd == "hypr":
+        hy = ScyHyprCoordinator(store)
+        if args.action == "emit":
+            print(json.dumps(hy.emit_modular_configs(), indent=2))
+        elif args.action == "keybinds":
+            ledger = hy.build_complete_shortcut_ledger()
+            if args.full:
+                print(json.dumps(ledger, indent=2))
+            else:
+                print(json.dumps({
+                    "counts": ledger["counts"],
+                    "compositor_collisions": ledger["compositor_collisions"],
+                    "desktop_icons_intra_clashes": ledger["desktop_icons_intra_clashes"],
+                    "cross_scope_compositor_overlaps": ledger["cross_scope_compositor_overlaps"],
+                }, indent=2))
+        elif args.action == "trial-confirm":
+            print(json.dumps(hy.confirm_trial(), indent=2))
+        elif args.action == "trial-revert":
+            print(json.dumps(hy.revert_trial(), indent=2))
+        return 0
+
+    if args.cmd == "preauth":
+        paths = ScyPreAuthCoordinator(store).stage_display_manager_configs()
+        print(json.dumps({k: str(v) for k, v in paths.items()}, indent=2))
+        return 0
+
+    if args.cmd == "backup":
+        if args.action == "create":
+            b = store.create_backup(tag=args.target or "manual")
+            print(str(b))
+            return 0
+        if args.action == "restore":
+            if not args.target or not str(args.target).strip():
+                print("ERROR: 'backup restore' requires a backup directory path or snapshot name.", file=sys.stderr)
+                return 1
+            try:
+                resolved_dir = store.resolve_backup_dir(args.target)
+                restored_files = store.restore_backup(resolved_dir)
+            except Exception as exc:
+                print(f"ERROR: Backup restore failed: {exc}", file=sys.stderr)
+                return 1
+            print(json.dumps({
+                "ok": True,
+                "backup_dir": str(resolved_dir),
+                "restored_count": len(restored_files),
+                "restored_files": restored_files,
+            }, indent=2))
+            return 0
+        broot = store.backup_root
+        items = sorted([p.name for p in broot.iterdir() if p.is_dir()]) if broot.exists() else []
+        print(json.dumps(items, indent=2))
+        return 0
+
+    if args.cmd == "start":
+        plan = [
+            f"{ROOT / 'bin' / 'scy-daemon'}",
+            "quickshell -p ~/.config/quickshell/lucid  # NVIDIA-aware via launch-shell.sh",
+            "mandara  # Dormant 0-swapchain mode when Lucid owns visual surfaces",
+        ]
+        if args.dry_run or not os.environ.get("WAYLAND_DISPLAY"):
+            print(json.dumps({"session_plan": plan, "wayland_live": bool(os.environ.get("WAYLAND_DISPLAY"))}, indent=2))
+            return 0
+        subprocess.Popen([str(ROOT / "bin" / "scy-daemon")])
+        return 0
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,66 @@
+# Maintainer: Scy-Shell Contributors
+pkgname=scy-shell
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Unified Linux/Wayland desktop shell combining Lucid 2 (M3 Expressive QML) & Mandara (Rust GPUI/WASM/AI) for CachyOS + Hyprland"
+arch=('x86_64')
+url="https://example.org/scy-shell"
+license=('GPL-3.0-or-later' 'MIT')
+depends=(
+  'hyprland>=0.55.0'
+  'quickshell'
+  'qt6-declarative'
+  'qt6-svg'
+  'qt6-multimedia'
+  'python>=3.11'
+  'awww'
+  'matugen'
+  'cliphist'
+  'wl-clipboard'
+  'xdg-desktop-portal-hyprland'
+  'xdg-desktop-portal-gtk'
+  'networkmanager'
+  'bluez'
+  'pipewire'
+  'wireplumber'
+)
+makedepends=('gcc' 'make' 'rust' 'cargo' 'git' 'pkgconf' 'wayland-protocols' 'clang')
+optdepends=(
+  'tesseract: LucidShot screen OCR text extraction'
+  'wf-recorder: MP4/GIF screen recording'
+  'ddcutil: Hardware brightness control for external displays'
+  'kdeconnect: Phone notifications, file share & remote'
+  'sddm: Optional Lucid per-user synced login theme'
+  'greetd: Optional Mandara native Wayland greeter'
+)
+source=()
+sha256sums=()
+
+build() {
+  cd "$startdir/../.."
+  gcc -O3 -Wall -Wextra -Werror -std=c11 csrc/scy_ipc_client.c -o bin/scy-shell-ipc
+  if [[ -d "$startdir/../../engines/mandara" ]]; then
+    cd "$startdir/../../engines/mandara"
+    cargo build --release --locked
+  elif [[ -d "$startdir/../../../sources/mandara-working" ]]; then
+    cd "$startdir/../../../sources/mandara-working"
+    cargo build --release --locked
+  fi
+}
+
+package() {
+  cd "$startdir/../.."
+  install -Dm755 bin/scy-shell "$pkgdir/usr/bin/scy-shell"
+  install -Dm755 bin/scy-daemon "$pkgdir/usr/bin/scy-daemon"
+  install -Dm755 bin/scy-shell-ipc "$pkgdir/usr/bin/scy-shell-ipc"
+
+  mkdir -p "$pkgdir/usr/share/scy-shell"
+  cp -r src schema studio adapters "$pkgdir/usr/share/scy-shell/"
+
+  install -Dm644 packaging/systemd/scy-daemon.service "$pkgdir/usr/lib/systemd/user/scy-daemon.service"
+  install -Dm644 packaging/systemd/scy-lucid.service "$pkgdir/usr/lib/systemd/user/scy-lucid.service"
+  install -Dm644 packaging/systemd/scy-mandara.service "$pkgdir/usr/lib/systemd/user/scy-mandara.service"
+  install -Dm644 packaging/wayland-sessions/scy-shell-hyprland.desktop "$pkgdir/usr/share/wayland-sessions/scy-shell-hyprland.desktop"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 THIRD_PARTY_NOTICES.md "$pkgdir/usr/share/licenses/$pkgname/THIRD_PARTY_NOTICES.md"
+}

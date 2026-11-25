@@ -1,0 +1,14 @@
+[Unit]
+Description=Scy-Shell — Lucid 2 Material 3 Expressive QML Engine (Quickshell)
+PartOf=graphical-session.target
+After=scy-daemon.service
+Requires=scy-daemon.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/quickshell -p %h/.config/quickshell/lucid
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target

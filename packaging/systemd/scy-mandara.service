@@ -1,0 +1,14 @@
+[Unit]
+Description=Scy-Shell — Mandara Rust GPUI Engine, AI Agent & WASM Plugin Host
+PartOf=graphical-session.target
+After=scy-daemon.service
+Requires=scy-daemon.service
+
+[Service]
+Type=simple
+ExecStart=/bin/sh -c 'if [ -x "$HOME/.local/bin/mandara" ]; then exec "$HOME/.local/bin/mandara"; else exec mandara; fi'
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target
